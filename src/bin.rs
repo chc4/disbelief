@@ -4,7 +4,7 @@ use hysteresis::*;
 use std::rc::Rc;
 
 fn main() {
-    let id = Rc::new(|v| v);
+    //let id = Rc::new(|()| Box::new(|v| v));
     let tests = [
         "1",
         "(+ 1 2)",
@@ -23,7 +23,7 @@ fn main() {
     for test in tests {
         println!("---");
         let e = parse_expr(test).unwrap().1;
-        let one_compiled = compile(&e, id.clone());
+        let one_compiled = compile(&e, Rc::new(|()| Box::new(|v| v)));
         println!("=> compiled one");
         let eval_one = one_compiled(());
         println!("{:?}", eval_one);
