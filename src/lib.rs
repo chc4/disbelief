@@ -35,7 +35,7 @@ pub enum Value {
 }
 
 pub fn compile<'a>(e: &'a Expr, cont: Rc<dyn Cont>) -> Box<dyn Compile> {
-    println!("{:?}", e);
+    println!(".{:?}", e);
     match e {
         Expr::Constant(u) => {
             let u = u.clone();
@@ -142,9 +142,11 @@ pub fn compile<'a>(e: &'a Expr, cont: Rc<dyn Cont>) -> Box<dyn Compile> {
         },
         Expr::Resume(c, r) => {
             let r = compile(r, Rc::new(move |r_val| {
+                println!("resume continuation");
                 r_val
             }));
             let coro = compile(c, Rc::new(move |coro_val| {
+                println!("coroutine continuation");
                 coro_val
             }));
             cont(Box::new(move |e| {
@@ -154,7 +156,7 @@ pub fn compile<'a>(e: &'a Expr, cont: Rc<dyn Cont>) -> Box<dyn Compile> {
                         println!("resuming coroutine");
                         coro(r_val)
                 } else {
-                    panic!("can't resume non-coroutine");
+                    panic!("can't resume non-coroutine {:?}", coro_val);
                 }
             }))
         }

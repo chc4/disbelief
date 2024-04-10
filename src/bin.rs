@@ -13,7 +13,9 @@ fn main() {
         "suspend",
         "resume suspend 1",
         "resume (+ suspend 2) 1",
+        "resume (+ 1 suspend) 2",
         "resume resume (+ suspend suspend) 1 2",
+        "resume resume (+ (+ 1 suspend) suspend) 2 3",
         //"(+ suspend 2)",
         //"resume (+ suspend 2) 1",
     ];
