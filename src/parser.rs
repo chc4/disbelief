@@ -107,10 +107,11 @@ pub enum Expr {
 pub struct ListExpr(pub Vec<Expr>);
 impl Display for ListExpr {
     fn fmt(&self, fmt: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
-        let first = true;
+        let mut first = true;
         for elem in &self.0 {
             if first {
                 write!(fmt, "{}", elem)?;
+                first = false;
             } else {
                 write!(fmt, " {}", elem)?;
             }
