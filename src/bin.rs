@@ -1,5 +1,5 @@
-use hysteresis::parser::*;
-use hysteresis::*;
+use disbelief::parser::*;
+use disbelief::*;
 
 use std::rc::Rc;
 

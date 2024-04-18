@@ -56,9 +56,12 @@ pub enum Atom {
 /// The remaining half is Lists. We implement these as recursive Expressions.
 /// For a list of numbers, we have `'(1 2 3)`, which we'll parse to:
 /// ```
-/// Expr::Quote(vec![Expr::Constant(Atom::Num(1)),
-///                  Expr::Constant(Atom::Num(2)),
-///                  Expr::Constant(Atom::Num(3))])
+/// use disbelief::parser::{Expr, Atom};
+/// use std::num::Wrapping;
+/// Expr::Quote(vec![Expr::Constant(Atom::Num(Wrapping(1))),
+///                  Expr::Constant(Atom::Num(Wrapping(2))),
+///                  Expr::Constant(Atom::Num(Wrapping(3)))]);
+/// ```
 /// Quote takes an S-expression and prevents evaluation of it, making it a data
 /// structure that we can deal with programmatically. Thus any valid expression
 /// is also a valid data structure in Lisp itself.
