@@ -23,10 +23,12 @@ fn main() {
     for test in tests {
         println!("---");
         let e = parse_expr(test).unwrap().1;
-        let one_compiled = compile(&e, Box::new(|()| Box::new(|v| v)));
+        let one_compiled = compile(&e, Rc::new(|()| Box::new(|v| v)));
         println!("=> compiled one");
         let eval_one = one_compiled(());
+        let eval_two = one_compiled(());
         println!("{:?}", eval_one);
+        assert_eq!(eval_one, eval_two);
     }
     //let two = compile(&Expr::Resume(
     //    Rc::new(Expr::Add(

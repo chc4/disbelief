@@ -24,8 +24,8 @@ impl Debug for Value {
 //}
 
 pub type Env = ();
-trait Compile = FnOnce(Env) -> Value;
-trait Cont = FnOnce(()) -> Box<dyn FnOnce(Box<dyn Compile>) -> Box<dyn Compile>>;
+trait Compile = Fn(Env) -> Value;
+trait Cont = Fn(()) -> Box<dyn FnOnce(Rc<dyn Compile>) -> Rc<dyn Compile>>;
 
 use std::cell::Cell;
 #[derive(Clone)]
@@ -35,30 +35,47 @@ pub enum Value {
     Coroutine(Rc<Cell<Box<dyn FnOnce(Value) -> Value>>>),
 }
 
-pub fn compile<'a>(e: &'a Expr, cont: Box<dyn Cont>) -> Box<dyn Compile> {
+impl PartialEq for Value {
+    fn eq(&self, rhs: &Self) -> bool {
+        match (self, rhs) {
+            (Value::Atom(a), Value::Atom(b)) => a == b,
+            (Value::Quote(a), Value::Quote(b)) => a == b,
+            //(Value::Coroutine(a), Value::Coroutine(b)) => a.as_ptr() == b.as_ptr(),
+            (Value::Coroutine(a), Value::Coroutine(b)) => true,
+            _ => false
+        }
+    }
+}
+
+pub fn compile<'a>(e: &'a Expr, cont: Rc<dyn Cont>) -> Rc<dyn Compile> {
     println!(".{}", e);
     match e {
         Expr::Constant(u) => {
             let u = u.clone();
             let cont = cont(());
-            cont(Box::new(move |e| { println!("returning {}", u); Value::Atom(u) }))
+            cont(Rc::new(move |e| { println!("returning {}", u); Value::Atom(u.clone()) }))
         },
         Expr::Application(f, args) => {
-            let args = args.clone();
             //let cont = cont(());
-            compile(f, Box::new(move |()| {
+            let args = args.clone();
+            compile(f, Rc::new(move |()| {
+            let cont = cont.clone();
+            let args = args.clone();
             Box::new(move |head| {
 
                 use std::cell::RefCell;
                 use std::collections::VecDeque;
-                fn args_recurse(cont: Box<dyn Cont>, head: Box<dyn Compile>, mut vals: Rc<RefCell<Vec<Option<Box<dyn Compile>>>>>, mut args: Rc<RefCell<VecDeque<Expr>>>) -> Box<dyn Compile> {
+                fn args_recurse(cont: Rc<dyn Cont>, head: Rc<dyn Compile>, mut vals: Rc<RefCell<Vec<Option<Rc<dyn Compile>>>>>, mut args: Rc<RefCell<VecDeque<Expr>>>) -> Rc<dyn Compile> {
                     let next_val = args.borrow_mut().pop_front();
                     if let Some(next_val) = next_val {
                         let next_val_e = next_val.clone();
                         let i = args.borrow().len();
                         vals.borrow_mut().push(None);
                         let v = args_recurse(cont, head, vals.clone(), args.clone());
-                        compile(&next_val, Box::new(move |()| {
+                        compile(&next_val, Rc::new(move |()| {
+                            let next_val_e = next_val_e.clone();
+                            let v = v.clone();
+                            let vals = vals.clone();
                             Box::new(move |next_val| {
                             println!("{} = {}", i, next_val_e);
                                 vals.borrow_mut()[i] = Some(next_val);
@@ -67,10 +84,10 @@ pub fn compile<'a>(e: &'a Expr, cont: Box<dyn Cont>) -> Box<dyn Compile> {
                             }) }))
                     } else {
                         println!("running cont");
-                        cont(())(Box::new(move |e| {
+                        cont(())(Rc::new(move |e| {
                             let head = head(e);
-                            let mut vals: Vec<_> = Rc::into_inner(vals).unwrap().borrow_mut().drain(..).rev().map(|a|
-                                (a.unwrap())(e)).collect();
+                            let mut vals: Vec<_> = vals.borrow_mut().iter().rev().map(|a|
+                                (a.clone().unwrap())(e)).collect();
                             println!("vals {:?}", vals);
                             match (head, vals.as_slice()) {
                                 (Value::Atom(Atom::BuiltIn(BuiltIn::Plus)),
@@ -94,7 +111,7 @@ pub fn compile<'a>(e: &'a Expr, cont: Box<dyn Cont>) -> Box<dyn Compile> {
         },
         Expr::Quote(q) => {
             let q = q.clone();
-            cont(())(Box::new(move |e| Value::Quote(q)))
+            cont(())(Rc::new(move |e| Value::Quote(q.clone())))
         },
         //Expr::Add(l, r) => {
         //    let r = r.clone();
@@ -115,26 +132,29 @@ pub fn compile<'a>(e: &'a Expr, cont: Box<dyn Cont>) -> Box<dyn Compile> {
         //    cont(capture)
         //},
         Expr::Suspend => {
-            Box::new(move |e1| {
+            let cont = cont.clone();
+            Rc::new(move |e1| {
                 println!("returning coroutine");
+                let e1_once = Rc::new(Cell::new(e1));
+                let cont = cont(());
                 Value::Coroutine(Rc::new(Cell::new(Box::new(move |v: Value| {
                     println!("running coroutine");
-                    let cont = cont(());
-                    cont(Box::new(move |e| v))(e1)
+                    cont(Rc::new(move |e| v.clone()))(e1_once.clone().take())
                 }))))
             })
         },
         Expr::Resume(c, r) => {
-            let coro_val = compile(c, Box::new(|()| Box::new(move |coro_val| {
+            let coro_val = compile(c, Rc::new(|()| Box::new(move |coro_val| {
                 println!("coroutine continuation");
                 coro_val
             })));
-            compile(r, Box::new(move |()| {
-                Box::new(move |r_val: Box<dyn Compile>| {
-                println!("resume continuation");
+            compile(r, Rc::new(move |()| {
+                let coro_val = coro_val.clone();
                 let cont = cont(());
-                cont(Box::new(move |e| {
-                    let coro_val = coro_val(e);
+                Box::new(move |r_val: Rc<dyn Compile>| {
+                println!("resume continuation");
+                cont(Rc::new(move |e| {
+                    let coro_val = (coro_val.clone())(e);
                     let r_val = r_val(e);
                     if let Value::Coroutine(coro) = coro_val {
                             println!("resuming coroutine");
