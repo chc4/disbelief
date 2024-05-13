@@ -34,6 +34,8 @@ fn main() {
         ("(resume (handle :foo 1 (handle :foo 2 raise :foo)) 3)", Some(one_shot("2"))),
         ("(resume (handle :foo suspend raise :foo) 3)", Some(one_shot("3"))),
         ("(+ 1 (resume (handle :foo 2 raise :foo) 0))", Some(one_shot("3"))),
+        ("(resume (handle :foo 1 (+ raise :bar 2)) 0)", Some(one_shot("2"))),
+        ("(resume (handle :foo 1 (+ raise :foo 2)) 0)", Some(one_shot("3"))),
         //"(+ suspend 2)",
         //"resume (+ suspend 2) 1",
     ];
