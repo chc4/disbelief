@@ -320,23 +320,23 @@ fn parse_raise<'a>(i: &'a str) -> IResult<&'a str, Expr, VerboseError<&'a str>> 
 }
 
 fn parse_resume<'a>(i: &'a str) -> IResult<&'a str, Expr, VerboseError<&'a str>> {
-    context("resume expression", map(
+    s_exp(context("resume expression", map(
         preceded(
             terminated(tag("resume"), multispace1),
             cut(tuple((parse_expr, parse_expr))),
         ),
     |(coro, cont)| Expr::Resume(Box::new(coro), Box::new(cont)))
-    )(i)
+    ))(i)
 }
 
 fn parse_handle<'a>(i: &'a str) -> IResult<&'a str, Expr, VerboseError<&'a str>> {
-    context("handle expression", map(
+    s_exp(context("handle expression", map(
         preceded(
             terminated(tag("handle"), multispace1),
             cut(tuple((parse_expr, parse_expr, parse_expr))),
         ),
     |(eff, res, coro)| Expr::Handle(Box::new(eff), Box::new(res), Box::new(coro)))
-    )(i)
+    ))(i)
 }
 
 /// A quoted S-expression is list data structure.
