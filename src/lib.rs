@@ -101,7 +101,7 @@ pub fn compile<'a>(e: &'a Expr, cont: Rc<dyn Cont>) -> Rc<dyn Compile> {
                                     Value::Atom(Atom::Num(l + r))
                                     //Box::new(move |()| panic!("{} {}", l, r))
                                 },
-                                _ => unimplemented!(),
+                                x => unimplemented!("{:?}", x),
                             }
                         }))
                     }
@@ -193,45 +193,34 @@ pub fn compile<'a>(e: &'a Expr, cont: Rc<dyn Cont>) -> Rc<dyn Compile> {
                 let coro_val_ = compile(coro, Rc::new(move |eff| {
                     println!("handle_coro_effect {:?}", eff);
                     if let Some(ref eff) = eff && can_handle == *eff {
+                        println!("matched effect");
                         let cont = cont.clone();
                         let r_val = r_val.clone();
                         Box::new(move |coro_val| {
                             println!("handling coro effect");
                             let r_val = r_val.clone();
-                            Rc::new(move |e: Env| {
+                            cont(None)(Rc::new(move |e: Env| {
                                 let coro_val = coro_val(e);
                                 println!("handling coro continuation, {:?}", coro_val);
-                                //if let Value::Coroutine(coro) = coro_val {
-                                    let r_val = (r_val.clone())(e);
-                                    //(coro.replace(Box::new(|val| panic!("attempted to handle already resumed coroutine"))))(r_val)
+                                let r_val = r_val(e);
+                                if let Value::Coroutine(r_coro) = r_val {
+                                    (r_coro.replace(Box::new(|val| panic!("attempted to handle with resumed coroutine"))))(coro_val)
+                                } else {
                                     r_val
-                                //} else {
-                                //    coro_val
-                                //}
-                            })
+                                }
+                            }))
                         })
                     } else {
-                        println!("bubbling effect");
+                        println!("bubbling effect, not {}", can_handle);
                         let eff = eff.clone();
                         let cont = cont.clone();
                         cont(eff)
                     }
                 }));
                 let r_val = r_val2.clone();
-                Rc::new(move |e: Env| {
-                    println!("running handle continuation");
-                    let coro_val = coro_val_(e);
-                    println!("coro_val {:?}", coro_val);
-                    (coro_val)
-                    //if let Value::Coroutine(coro) = coro_val {
-                    //    println!("running handle coroutine continuation");
-                    //    let r_val = r_val(e);
-                    //    let coro_res = (coro.replace(Box::new(|val| panic!("attempted to handle already resumed coroutine"))))(r_val);
-                    //    coro_res
-                    //} else {
-                    //    panic!()
-                    //}
-                })
+                default_cont(Rc::new(move |e: Env| {
+                    return coro_val_(e);
+                }))
                 //compile(res, Rc::new(move |_eff| {
                 //    let coro_val = compile(coro, Rc::new(move |eff| {
                 //        let contc = contc.clone();
