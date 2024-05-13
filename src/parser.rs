@@ -44,13 +44,25 @@ pub enum BuiltIn {
 use std::num::Wrapping;
 pub type Int = Wrapping<usize>;
 
-#[derive(Debug, PartialEq, Clone, Display)]
+#[derive(Debug, PartialEq, Clone)]
 pub enum Atom {
   Num(Int),
   Keyword(String),
   //Boolean(bool),
   BuiltIn(BuiltIn),
   Unit,
+}
+
+use core::fmt::Formatter;
+impl Display for Atom {
+    fn fmt(&self, fmt: &mut Formatter<'_>) -> Result<(), std::fmt::Error> {
+        match self {
+            Atom::Num(n) => write!(fmt, "{}", n),
+            Atom::Keyword(k) => write!(fmt, ":{}", k),
+            Atom::BuiltIn(b) => write!(fmt, "{}", b),
+            Atom::Unit => write!(fmt, "()"),
+        }
+    }
 }
 
 /// The remaining half is Lists. We implement these as recursive Expressions.
@@ -78,7 +90,12 @@ pub enum Expr {
   /// '(3 (if (+ 3 3) 4 5) 7)
   Quote(Vec<Expr>),
   Suspend,
+  /// (resume coro val)
   Resume(Box<Expr>, Box<Expr>),
+  /// (handle :effect val coro)
+  Handle(Box<Expr>, Box<Expr>, Box<Expr>),
+  /// (raise :effect)
+  Raise(Box<Expr>),
 }
 //impl Expr {
 //    pub fn need_int(&mut self) -> Result<Int, crate::EvalError> {
@@ -132,7 +149,9 @@ impl Display for Expr {
             Expr::IfElse(cond, t_body, f_body) => write!(fmt, "(if-else {} {} {})",
                 cond, t_body, f_body),
             Expr::Suspend => write!(fmt, "suspend"),
+            Expr::Raise(eff) => write!(fmt, "(raise {})", eff),
             Expr::Resume(coro, cont) => write!(fmt, "(resume {} {})", coro, cont),
+            Expr::Handle(eff, res, coro) => write!(fmt, "(handle {} {} {})", eff, res, coro),
             Expr::Quote(contents) => write!(fmt, "'({})", ListExpr(contents.clone()))
         }
     }
@@ -216,7 +235,8 @@ fn parse_atom<'a>(i: &'a str) -> IResult<&'a str, Atom, VerboseError<&'a str>> {
 fn parse_constant<'a>(i: &'a str) -> IResult<&'a str, Expr, VerboseError<&'a str>> {
   alt((
     map(parse_atom, |atom| Expr::Constant(atom)),
-    parse_suspend
+    parse_suspend,
+    parse_raise,
   ))(i)
 }
 
@@ -289,6 +309,16 @@ fn parse_suspend<'a>(i: &'a str) -> IResult<&'a str, Expr, VerboseError<&'a str>
     |_| Expr::Suspend)(i)
 }
 
+fn parse_raise<'a>(i: &'a str) -> IResult<&'a str, Expr, VerboseError<&'a str>> {
+    context("raise expression", map(
+        preceded(
+            terminated(tag("raise"), multispace1),
+            cut(parse_expr),
+        ),
+    |eff| Expr::Raise(Box::new(eff)))
+    )(i)
+}
+
 fn parse_resume<'a>(i: &'a str) -> IResult<&'a str, Expr, VerboseError<&'a str>> {
     context("resume expression", map(
         preceded(
@@ -296,6 +326,16 @@ fn parse_resume<'a>(i: &'a str) -> IResult<&'a str, Expr, VerboseError<&'a str>>
             cut(tuple((parse_expr, parse_expr))),
         ),
     |(coro, cont)| Expr::Resume(Box::new(coro), Box::new(cont)))
+    )(i)
+}
+
+fn parse_handle<'a>(i: &'a str) -> IResult<&'a str, Expr, VerboseError<&'a str>> {
+    context("handle expression", map(
+        preceded(
+            terminated(tag("handle"), multispace1),
+            cut(tuple((parse_expr, parse_expr, parse_expr))),
+        ),
+    |(eff, res, coro)| Expr::Handle(Box::new(eff), Box::new(res), Box::new(coro)))
     )(i)
 }
 
@@ -319,6 +359,6 @@ fn parse_quote<'a>(i: &'a str) -> IResult<&'a str, Expr, VerboseError<&'a str>> 
 pub fn parse_expr<'a>(i: &'a str) -> IResult<&'a str, Expr, VerboseError<&'a str>> {
   preceded(
     multispace0,
-    alt((parse_constant, parse_application, parse_if, parse_quote, parse_resume)),
+    alt((parse_constant, parse_application, parse_if, parse_quote, parse_resume, parse_handle)),
   )(i)
 }

@@ -1,4 +1,4 @@
-#![feature(trait_alias)]
+#![feature(trait_alias, let_chains)]
 pub mod tree;
 pub mod parser;
 use parser::{Atom, Expr, BuiltIn};
@@ -25,7 +25,12 @@ impl Debug for Value {
 
 pub type Env = ();
 trait Compile = Fn(Env) -> Value;
-trait Cont = Fn(()) -> Box<dyn FnOnce(Rc<dyn Compile>) -> Rc<dyn Compile>>;
+#[derive(Debug, Clone, Copy)]
+pub enum Effect {
+    Foo,
+    Bar
+}
+trait Cont = Fn(Option<String>) -> Box<dyn Fn(Rc<dyn Compile>) -> Rc<dyn Compile>>;
 
 use std::cell::Cell;
 #[derive(Clone)]
@@ -52,14 +57,14 @@ pub fn compile<'a>(e: &'a Expr, cont: Rc<dyn Cont>) -> Rc<dyn Compile> {
     match e {
         Expr::Constant(u) => {
             let u = u.clone();
-            let cont = cont(());
+            let cont = cont(None);
             cont(Rc::new(move |e| { println!("returning {}", u); Value::Atom(u.clone()) }))
         },
         Expr::Application(f, args) => {
             //let cont = cont(());
             let args = args.clone();
-            compile(f, Rc::new(move |()| {
-            let cont = cont.clone();
+            compile(f, Rc::new(move |eff| {
+            let cont = Cell::new(Some(cont.clone()));
             let args = args.clone();
             Box::new(move |head| {
 
@@ -72,19 +77,19 @@ pub fn compile<'a>(e: &'a Expr, cont: Rc<dyn Cont>) -> Rc<dyn Compile> {
                         let i = args.borrow().len();
                         vals.borrow_mut().push(None);
                         let v = args_recurse(cont, head, vals.clone(), args.clone());
-                        compile(&next_val, Rc::new(move |()| {
+                        compile(&next_val, Rc::new(move |eff| {
                             let next_val_e = next_val_e.clone();
-                            let v = v.clone();
+                            let v = Cell::new(Some(v.clone()));
                             let vals = vals.clone();
                             Box::new(move |next_val| {
                             println!("{} = {}", i, next_val_e);
                                 vals.borrow_mut()[i] = Some(next_val);
                                 //vals.borrow_mut().push(next_val);
-                                v
+                                v.take().unwrap()
                             }) }))
                     } else {
                         println!("running cont");
-                        cont(())(Rc::new(move |e| {
+                        cont(None)(Rc::new(move |e| {
                             let head = head(e);
                             let mut vals: Vec<_> = vals.borrow_mut().iter().rev().map(|a|
                                 (a.clone().unwrap())(e)).collect();
@@ -103,7 +108,7 @@ pub fn compile<'a>(e: &'a Expr, cont: Rc<dyn Cont>) -> Rc<dyn Compile> {
                 }
 
                 let mut args_to_run = args.clone();
-                args_recurse(cont, head, Rc::new(RefCell::new(vec![])), Rc::new(RefCell::new(args_to_run.into())))
+                args_recurse(cont.take().unwrap(), head, Rc::new(RefCell::new(vec![])), Rc::new(RefCell::new(args_to_run.into())))
             })}))
         },
         Expr::IfElse(cond, t, f) => {
@@ -111,7 +116,7 @@ pub fn compile<'a>(e: &'a Expr, cont: Rc<dyn Cont>) -> Rc<dyn Compile> {
         },
         Expr::Quote(q) => {
             let q = q.clone();
-            cont(())(Rc::new(move |e| Value::Quote(q.clone())))
+            cont(None)(Rc::new(move |e| Value::Quote(q.clone())))
         },
         //Expr::Add(l, r) => {
         //    let r = r.clone();
@@ -136,35 +141,166 @@ pub fn compile<'a>(e: &'a Expr, cont: Rc<dyn Cont>) -> Rc<dyn Compile> {
             Rc::new(move |e1| {
                 println!("returning coroutine");
                 let e1_once = Rc::new(Cell::new(e1));
-                let cont = cont(());
+                // Fetch what our continuation will be
+                let cont = cont(None);
                 Value::Coroutine(Rc::new(Cell::new(Box::new(move |v: Value| {
                     println!("running coroutine");
+                    // Return to where our continuation was once we're evaluated
                     cont(Rc::new(move |e| v.clone()))(e1_once.clone().take())
                 }))))
             })
         },
         Expr::Resume(c, r) => {
-            let coro_val = compile(c, Rc::new(|()| Box::new(move |coro_val| {
+            let coro_val = compile(c, Rc::new(|eff| Box::new(move |coro_val| {
                 println!("coroutine continuation");
                 coro_val
             })));
-            compile(r, Rc::new(move |()| {
-                let coro_val = coro_val.clone();
-                let cont = cont(());
-                Box::new(move |r_val: Rc<dyn Compile>| {
-                println!("resume continuation");
-                cont(Rc::new(move |e| {
-                    let coro_val = (coro_val.clone())(e);
+            let r_val = compile(r, Rc::new(move |eff| Box::new(move |r_val| {
+                r_val
+            })));
+            let cont = cont(None);
+            cont(Rc::new(move |e: Env| {
+                let coro_val = (coro_val.clone())(e);
+                if let Value::Coroutine(coro) = coro_val {
                     let r_val = r_val(e);
-                    if let Value::Coroutine(coro) = coro_val {
-                            println!("resuming coroutine");
-                            (coro.replace(Box::new(|val| panic!("attempted to resume already resumed coroutine"))))(r_val)
+                    println!("resuming coroutine");
+                    let coro_res = (coro.replace(Box::new(|val| panic!("attempted to resume already resumed coroutine"))))(r_val);
+                    coro_res
+                } else {
+                    //panic!("can't resume non-coroutine {:?}", coro_val);
+                    coro_val
+                }
+            }))
+        },
+        Expr::Handle(effect, res, coro) => {
+            let effect = compile(effect, Rc::new(|eff| {
+                 println!("handle_effect {:?}", eff);
+                 Box::new(move |e_val| {
+                     e_val
+                 })
+            }));
+            let r_val = compile(res, Rc::new(move |eff| Box::new(move |r_val| {
+                r_val
+            })));
+
+            // statically evaluate effect
+            let can_handle = effect(());
+            // default handler
+            let default_cont = cont(None);
+            if let Value::Atom(Atom::Keyword(can_handle)) = can_handle {
+                let can_handle: String = can_handle.clone();
+                let r_val2 = r_val.clone();
+                let coro_val_ = compile(coro, Rc::new(move |eff| {
+                    println!("handle_coro_effect {:?}", eff);
+                    if let Some(ref eff) = eff && can_handle == *eff {
+                        let cont = cont.clone();
+                        let r_val = r_val.clone();
+                        Box::new(move |coro_val| {
+                            println!("handling coro effect");
+                            let r_val = r_val.clone();
+                            Rc::new(move |e: Env| {
+                                let coro_val = coro_val(e);
+                                println!("handling coro continuation, {:?}", coro_val);
+                                //if let Value::Coroutine(coro) = coro_val {
+                                    let r_val = (r_val.clone())(e);
+                                    //(coro.replace(Box::new(|val| panic!("attempted to handle already resumed coroutine"))))(r_val)
+                                    r_val
+                                //} else {
+                                //    coro_val
+                                //}
+                            })
+                        })
                     } else {
-                        panic!("can't resume non-coroutine {:?}", coro_val);
+                        println!("bubbling effect");
+                        let eff = eff.clone();
+                        let cont = cont.clone();
+                        cont(eff)
                     }
-                }))
-            })}))
-        }
+                }));
+                let r_val = r_val2.clone();
+                Rc::new(move |e: Env| {
+                    println!("running handle continuation");
+                    let coro_val = coro_val_(e);
+                    println!("coro_val {:?}", coro_val);
+                    (coro_val)
+                    //if let Value::Coroutine(coro) = coro_val {
+                    //    println!("running handle coroutine continuation");
+                    //    let r_val = r_val(e);
+                    //    let coro_res = (coro.replace(Box::new(|val| panic!("attempted to handle already resumed coroutine"))))(r_val);
+                    //    coro_res
+                    //} else {
+                    //    panic!()
+                    //}
+                })
+                //compile(res, Rc::new(move |_eff| {
+                //    let coro_val = compile(coro, Rc::new(move |eff| {
+                //        let contc = contc.clone();
+                //        println!("handle_coro_effect {:?}", eff);
+                //        if let Some(ref eff) = eff && can_handle == *eff {
+                //            println!("matching effect handle {}", can_handle);
+                //            let contc = {contc.clone()};
+                //            Box::new(move |coro_val| {
+                //                let 
+                //                let handle_val = handle_val.clone();
+                //                panic!("handle coroutine continuation");
+                //                contc(None)(Rc::new(move |e: Env| {
+                //                    let coro_val = (coro_val.clone())(e);
+                //                    let r_val = (handle_val.borrow_mut().unwrap())(e);
+                //                    println!("handle res {:?}", coro_val);
+                //                    if let Value::Coroutine(coro) = coro_val {
+                //                        println!("handling coroutine");
+                //                        (coro.replace(Box::new(|val| panic!("attempted to handle already resumed coroutine"))))(r_val)
+                //                    } else {
+                //                        coro_val
+                //                    }
+                //                }))
+                //            })
+                //        } else {
+                //            println!("mismatched effect handle {} != {:?}", can_handle, eff);
+                //            let contc = {contc.clone()};
+                //            Box::new(move |coro_val| {
+                //                panic!("forward coroutine continuation");
+                //                println!("{:?}",coro_val(()));
+                //                contc(eff.clone())(coro_val)
+                //            })
+                //        }
+                //    }));
+                //}))
+            } else {
+                panic!("can't handle non-keyword effect");
+            }
+            // handle(%foo, 1,
+            // handle(%bar, 2,
+            //   raise %foo
+            // )
+            // )
+        },
+        Expr::Raise(effect) => {
+            let effect = compile(effect, Rc::new(|eff| {
+                 println!("raise_effect {:?}", eff);
+                 Box::new(move |coro_val| {
+                     coro_val
+                 })
+            }));
+            let effect = effect(());
+            if let Value::Atom(Atom::Keyword(eff)) = effect {
+                let cont = cont.clone();
+                let cont = Rc::new(cont(Some(eff.clone())));
+                Rc::new(move |e1| {
+                    let cont = cont.clone();
+                    println!("raising coroutine");
+                    let e1_once = Rc::new(Cell::new(e1));
+                    println!("raise :{}", eff.clone());
+                    Value::Coroutine(Rc::new(Cell::new(Box::new(move |v: Value| {
+                        println!("running coroutine");
+                        (cont)(Rc::new(move |e| v.clone()))(e1_once.clone().take())
+                    }))))
+                })
+
+            } else {
+                panic!("can't raise non-keyword effect");
+            }
+        },
     }
 }
 
